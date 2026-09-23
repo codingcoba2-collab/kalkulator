@@ -39,21 +39,25 @@ async function transcribeWithGemini(audioData: string, cleanMime: string) {
           {
             text: `Anda adalah pendengar audio presisi tinggi untuk angka bahasa Indonesia.
 TUGAS: Dengarkan audio dan ekstrak HANYA kata/angka ASLI yang diucapkan oleh pengguna.
+FOKUS MUTLAK: Hanya bahasa Indonesia dan kebiasaan percakapan orang Indonesia.
 PERINGATAN KERAS: JANGAN PERNAH MENGALIKAN ATAU MENGUBAH ANGKA! HANYA KEMBALIKAN ANGKA ASLI YANG DIUCAPKAN.
-Contoh:
-- jika suara mengatakan "tujuh", kembalikan number: 7 (JANGAN TERTUKAR DENGAN 2!)
-- jika suara mengatakan "dua", kembalikan number: 2 (JANGAN TERTUKAR DENGAN 7!)
-- jika suara mengatakan "lima tujuh", kembalikan number: 57 (BUKAN 7!)
-- jika suara mengatakan "lima sembilan", kembalikan number: 59 (BUKAN 9!)
-- jika suara mengatakan "dua tujuh", kembalikan number: 27
-- jika suara mengatakan "dua lima", kembalikan number: 25
-- jika suara mengatakan "lima", kembalikan number: 5
-- jika suara mengatakan "tiga", kembalikan number: 3
-- jika suara mengatakan "empat", kembalikan number: 4
-- jika suara mengatakan "sepuluh", kembalikan number: 10
-- jika suara mengatakan "setengah", kembalikan number: 0.5
+Contoh kebiasaan orang Indonesia:
+- "lima delapan", "lima lapan", "lima puluh delapan" -> {"number": 58, "raw": "lima delapan"}
+- "lima sembilan", "lima smbilan", "lima puluh sembilan" -> {"number": 59, "raw": "lima sembilan"}
+- "lima tujuh", "lima puluh tujuh" -> {"number": 57, "raw": "lima tujuh"}
+- "tujuh delapan", "tujuh lapan" -> {"number": 78, "raw": "tujuh delapan"}
+- "dua lima", "dua puluh lima" -> {"number": 25, "raw": "dua lima"}
+- "dua tujuh" -> {"number": 27, "raw": "dua tujuh"}
+- "tujuh" -> {"number": 7, "raw": "tujuh"} (JANGAN TERTUKAR DENGAN 2!)
+- "dua" -> {"number": 2, "raw": "dua"} (JANGAN TERTUKAR DENGAN 7!)
+- "delapan" atau "lapan" -> {"number": 8, "raw": "delapan"}
+- "sembilan" -> {"number": 9, "raw": "sembilan"}
+- "lima" -> {"number": 5, "raw": "lima"}
+- "gocap" -> {"number": 50, "raw": "gocap"}
+- "cepek" -> {"number": 100, "raw": "cepek"}
+- "setengah" -> {"number": 0.5, "raw": "setengah"}
 Format JSON murni tanpa markdown:
-{"number": 2, "raw": "dua"}
+{"number": 58, "raw": "lima delapan"}
 Jika tidak ada ucapan angka yang jelas, kembalikan:
 {"number": null, "raw": ""}`,
           },
