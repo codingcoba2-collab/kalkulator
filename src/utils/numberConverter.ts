@@ -19,15 +19,12 @@ export const PHONETIC_MAP: Record<string, number> = {
   wan: 1,
   '1': 1,
 
-  // 2
+  // 2 - NOTE: "tu", "to", "too" are strictly removed to avoid false triggers on "tujuh"
   dua: 2,
   duah: 2,
   duaa: 2,
   duo: 2,
   doa: 2,
-  tu: 2,
-  to: 2,
-  too: 2,
   two: 2,
   '2': 2,
 
@@ -64,7 +61,7 @@ export const PHONETIC_MAP: Record<string, number> = {
   six: 6,
   '6': 6,
 
-  // 7
+  // 7 - Comprehensive Indonesian phonetic spellings
   tujuh: 7,
   tuju: 7,
   tujuuh: 7,
@@ -105,23 +102,15 @@ export const PHONETIC_MAP: Record<string, number> = {
   eleven: 11,
   '11': 11,
 
-  // 12
+  // 12 - 20
   '12': 12,
-  // 13
   '13': 13,
-  // 14
   '14': 14,
-  // 15
   '15': 15,
-  // 16
   '16': 16,
-  // 17
   '17': 17,
-  // 18
   '18': 18,
-  // 19
   '19': 19,
-  // 20
   '20': 20,
 
   // Scales & Fractions
@@ -140,9 +129,22 @@ export const PHONETIC_MAP: Record<string, number> = {
   half: 0.5,
 };
 
+// Single digit lookup for colloquial digit-by-digit phrases
+export const SINGLE_DIGIT_MAP: Record<string, number> = {
+  nol: 0, kosong: 0, zero: 0, '0': 0,
+  satu: 1, satuh: 1, stu: 1, one: 1, '1': 1,
+  dua: 2, duah: 2, duaa: 2, duo: 2, doa: 2, two: 2, '2': 2,
+  tiga: 3, tigah: 3, tigo: 3, three: 3, '3': 3,
+  empat: 4, ampat: 4, mpat: 4, pat: 4, four: 4, '4': 4,
+  lima: 5, limah: 5, limo: 5, five: 5, '5': 5,
+  enam: 6, anam: 6, nam: 6, six: 6, '6': 6,
+  tujuh: 7, tuju: 7, tujuuh: 7, tujuk: 7, tuduh: 7, seven: 7, '7': 7,
+  delapan: 8, dlapan: 8, lapan: 8, eight: 8, '8': 8,
+  sembilan: 9, smbilan: 9, bilan: 9, nine: 9, '9': 9,
+};
+
 /**
  * Extracts and parses a numeric value from spoken natural text.
- * Prioritizes recent intent and phonetic variations.
  */
 export function parseSpokenNumber(text: string): number | null {
   if (!text || typeof text !== 'string') return null;
@@ -157,13 +159,13 @@ export function parseSpokenNumber(text: string): number | null {
 
   if (!clean) return null;
 
-  // Direct digit check (e.g. "2", "7", "5", "2.5")
+  // Direct digit check (e.g. "57", "59", "2", "7", "2.5")
   if (/^[-+]?\d+(?:[.,]\d+)?$/.test(clean)) {
     const num = parseFloat(clean.replace(',', '.'));
     if (!isNaN(num)) return num;
   }
 
-  // Remove common filler prefixes/suffixes
+  // Remove common filler prefixes/suffixes (e.g. "tolong", "berapa", "kali dua")
   clean = clean
     .replace(/(?:(?:di)?kali\s*(?:dua|2|duo))\s*$/i, '')
     .replace(/^(?:dua|2|duo)\s*(?:kali|dikali)\s*/i, '')
@@ -181,6 +183,16 @@ export function parseSpokenNumber(text: string): number | null {
     return PHONETIC_MAP[clean];
   }
 
+  // Check colloquial digit concatenation (e.g. "lima tujuh" -> 57, "lima sembilan" -> 59, "dua lima" -> 25)
+  const rawWords = clean.split(/\s+/);
+  if (rawWords.length >= 2 && rawWords.every((w) => SINGLE_DIGIT_MAP[w] !== undefined)) {
+    const combinedDigits = rawWords.map((w) => SINGLE_DIGIT_MAP[w]).join('');
+    const asInt = parseInt(combinedDigits, 10);
+    if (!isNaN(asInt)) {
+      return asInt;
+    }
+  }
+
   // Handle spoken decimals e.g. "dua koma lima", "tujuh koma dua"
   if (clean.includes('koma')) {
     const parts = clean.split('koma');
@@ -188,8 +200,8 @@ export function parseSpokenNumber(text: string): number | null {
     const decimalWords = parts[1].trim().split(' ');
     let decimalStr = '';
     for (const w of decimalWords) {
-      if (PHONETIC_MAP[w] !== undefined && PHONETIC_MAP[w] < 10) {
-        decimalStr += PHONETIC_MAP[w];
+      if (SINGLE_DIGIT_MAP[w] !== undefined) {
+        decimalStr += SINGLE_DIGIT_MAP[w];
       } else if (/^\d+$/.test(w)) {
         decimalStr += w;
       }
@@ -199,14 +211,13 @@ export function parseSpokenNumber(text: string): number | null {
     }
   }
 
-  // Try compound Indonesian parsing e.g. "dua puluh lima", "tujuh belas"
+  // Try compound Indonesian parsing e.g. "lima puluh tujuh" -> 57, "tujuh belas" -> 17
   const compound = parseIndonesianCompound(clean);
   if (compound !== null) return compound;
 
-  // Look for any isolated number in words from right to left (latest spoken word first)
-  const words = clean.split(' ');
-  for (let i = words.length - 1; i >= 0; i--) {
-    const w = words[i];
+  // Search words from right to left
+  for (let i = rawWords.length - 1; i >= 0; i--) {
+    const w = rawWords[i];
     if (PHONETIC_MAP[w] !== undefined) {
       return PHONETIC_MAP[w];
     }
@@ -220,7 +231,7 @@ export function parseSpokenNumber(text: string): number | null {
 }
 
 /**
- * Parses Indonesian compound integer phrase (e.g. "dua puluh lima" -> 25)
+ * Parses Indonesian compound integer phrase (e.g. "lima puluh tujuh" -> 57)
  */
 export function parseIndonesianCompound(text: string): number | null {
   if (!text) return null;
@@ -240,9 +251,15 @@ export function parseIndonesianCompound(text: string): number | null {
     words.shift();
   }
 
-  // Check common two-word patterns e.g. "tujuh belas", "dua puluh"
+  // Check colloquial two single digits: "lima tujuh" -> 57, "lima sembilan" -> 59
   if (words.length === 2) {
     const [w1, w2] = words;
+    const d1 = SINGLE_DIGIT_MAP[w1];
+    const d2 = SINGLE_DIGIT_MAP[w2];
+    if (d1 !== undefined && d2 !== undefined) {
+      return (isNegative ? -1 : 1) * (d1 * 10 + d2);
+    }
+
     const v1 = PHONETIC_MAP[w1];
     if (v1 !== undefined) {
       if (w2 === 'belas' || w2 === 'blas') {
@@ -257,16 +274,10 @@ export function parseIndonesianCompound(text: string): number | null {
       if (w2 === 'ribu') {
         return (isNegative ? -1 : 1) * (v1 * 1000);
       }
-      // If user said two unrelated single numbers e.g. "dua tujuh" or speech recognition appended,
-      // take the latest word (w2) as the active intent!
-      const v2 = PHONETIC_MAP[w2];
-      if (v2 !== undefined) {
-        return (isNegative ? -1 : 1) * v2;
-      }
     }
   }
 
-  // Multi-word accumulator
+  // Multi-word accumulator (e.g. "lima puluh tujuh", "dua ratus lima puluh")
   let total = 0;
   let current = 0;
   let matchedAny = false;
@@ -334,7 +345,7 @@ export function parseIndonesianCompound(text: string): number | null {
 }
 
 /**
- * Converts a number to Indonesian spoken words, e.g. 4 -> "Empat", 14 -> "Empat belas"
+ * Converts a number to Indonesian spoken words, e.g. 114 -> "Seratus empat belas"
  */
 export function numberToIndonesianWords(n: number): string {
   if (n === 0) return 'Nol';

@@ -6,7 +6,16 @@ import { GoogleGenAI } from '@google/genai';
 dotenv.config();
 
 const app = express();
-const port = parseInt(process.env.PORT || '3000', 10);
+
+function getPort(): number {
+  const portIdx = process.argv.indexOf('--port');
+  if (portIdx !== -1 && process.argv[portIdx + 1]) {
+    return parseInt(process.argv[portIdx + 1], 10);
+  }
+  return parseInt(process.env.PORT || '3000', 10);
+}
+
+const port = getPort();
 
 app.use(express.json({ limit: '15mb' }));
 
@@ -32,9 +41,13 @@ async function transcribeWithGemini(audioData: string, cleanMime: string) {
 TUGAS: Dengarkan audio dan ekstrak HANYA kata/angka ASLI yang diucapkan oleh pengguna.
 PERINGATAN KERAS: JANGAN PERNAH MENGALIKAN ATAU MENGUBAH ANGKA! HANYA KEMBALIKAN ANGKA ASLI YANG DIUCAPKAN.
 Contoh:
-- jika suara mengatakan "dua", kembalikan number: 2 (BUKAN 4!)
-- jika suara mengatakan "tujuh", kembalikan number: 7 (BUKAN 14!)
-- jika suara mengatakan "lima", kembalikan number: 5 (BUKAN 10!)
+- jika suara mengatakan "tujuh", kembalikan number: 7 (JANGAN TERTUKAR DENGAN 2!)
+- jika suara mengatakan "dua", kembalikan number: 2 (JANGAN TERTUKAR DENGAN 7!)
+- jika suara mengatakan "lima tujuh", kembalikan number: 57 (BUKAN 7!)
+- jika suara mengatakan "lima sembilan", kembalikan number: 59 (BUKAN 9!)
+- jika suara mengatakan "dua tujuh", kembalikan number: 27
+- jika suara mengatakan "dua lima", kembalikan number: 25
+- jika suara mengatakan "lima", kembalikan number: 5
 - jika suara mengatakan "tiga", kembalikan number: 3
 - jika suara mengatakan "empat", kembalikan number: 4
 - jika suara mengatakan "sepuluh", kembalikan number: 10
@@ -97,8 +110,12 @@ async function startServer() {
     });
   }
 
-  app.listen(port, '0.0.0.0', () => {
+  const server = app.listen(port, '0.0.0.0', () => {
     console.log(`Server listening on port ${port}`);
+  });
+
+  server.on('error', (err: any) => {
+    console.error('Server error:', err);
   });
 }
 

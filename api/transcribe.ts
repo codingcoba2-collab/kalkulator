@@ -22,9 +22,13 @@ async function transcribeWithGemini(audioData: string, cleanMime: string) {
 TUGAS: Dengarkan audio dan ekstrak HANYA kata/angka ASLI yang diucapkan oleh pengguna.
 PERINGATAN KERAS: JANGAN PERNAH MENGALIKAN ATAU MENGUBAH ANGKA! HANYA KEMBALIKAN ANGKA ASLI YANG DIUCAPKAN.
 Contoh:
-- jika suara mengatakan "dua", kembalikan number: 2 (BUKAN 4!)
-- jika suara mengatakan "tujuh", kembalikan number: 7 (BUKAN 14!)
-- jika suara mengatakan "lima", kembalikan number: 5 (BUKAN 10!)
+- jika suara mengatakan "tujuh", kembalikan number: 7 (JANGAN TERTUKAR DENGAN 2!)
+- jika suara mengatakan "dua", kembalikan number: 2 (JANGAN TERTUKAR DENGAN 7!)
+- jika suara mengatakan "lima tujuh", kembalikan number: 57 (BUKAN 7!)
+- jika suara mengatakan "lima sembilan", kembalikan number: 59 (BUKAN 9!)
+- jika suara mengatakan "dua tujuh", kembalikan number: 27
+- jika suara mengatakan "dua lima", kembalikan number: 25
+- jika suara mengatakan "lima", kembalikan number: 5
 - jika suara mengatakan "tiga", kembalikan number: 3
 - jika suara mengatakan "empat", kembalikan number: 4
 - jika suara mengatakan "sepuluh", kembalikan number: 10
