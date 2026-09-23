@@ -20,8 +20,10 @@ export default function App() {
     mode,
     volume,
     statusMessage,
+    lastDetectedTranscript,
     toggleListening,
     startListening,
+    stopListening,
     repeatLastAnswer,
     processNumber,
     increaseSpeed,
@@ -115,7 +117,31 @@ export default function App() {
           audioLevel={audioLevel}
           onClick={toggleListening}
           statusText={statusMessage}
+          liveTranscript={lastDetectedTranscript}
         />
+
+        {/* Primary Audio Interaction Pill */}
+        <div className="mt-4">
+          {!isListening ? (
+            <button
+              type="button"
+              onClick={startListening}
+              className="px-6 py-2.5 rounded-full bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold text-xs tracking-wide shadow-xl shadow-cyan-500/30 active:scale-95 transition-all flex items-center gap-2 cursor-pointer"
+            >
+              <Mic className="w-4 h-4 text-white" />
+              <span>MULAI BICARA (KETUK DISINI)</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={stopListening}
+              className="px-4 py-1.5 rounded-full bg-zinc-900/90 border border-zinc-700/70 hover:border-zinc-600 text-zinc-300 text-xs font-medium flex items-center gap-2 active:scale-95 transition-all cursor-pointer backdrop-blur-md"
+            >
+              <span className="w-2 h-2 rounded-full bg-cyan-400 animate-ping" />
+              <span>Mikrofon Aktif (Ketuk untuk Jeda)</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Bottom Zone: Ergonomic Natural Thumb Controls */}

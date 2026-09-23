@@ -7,6 +7,7 @@ interface AudioOrbProps {
   audioLevel: number; // 0 to 1
   onClick: () => void;
   statusText: string;
+  liveTranscript?: string;
 }
 
 export const AudioOrb: React.FC<AudioOrbProps> = ({
@@ -16,6 +17,7 @@ export const AudioOrb: React.FC<AudioOrbProps> = ({
   audioLevel,
   onClick,
   statusText,
+  liveTranscript,
 }) => {
   // Compute dynamic scale and glow based on audio level
   const reactiveScale = 1 + audioLevel * 0.22;
@@ -138,10 +140,18 @@ export const AudioOrb: React.FC<AudioOrbProps> = ({
 
       {/* Immediate Audio Feedback Status Label */}
       <div className="mt-7 text-center max-w-xs px-4">
-        <p className="text-base font-medium text-zinc-100 tracking-tight transition-colors duration-200">
+        <p className="text-base font-semibold text-zinc-100 tracking-tight transition-colors duration-200">
           {statusText}
         </p>
-        <p className="text-xs text-zinc-400 mt-1">
+
+        {isListening && liveTranscript && (
+          <div className="mt-2 inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-cyan-950/40 border border-cyan-500/30 text-[11px] text-cyan-300 animate-in fade-in zoom-in-95 duration-150">
+            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+            <span className="truncate max-w-[200px]">Suara: &ldquo;{liveTranscript}&rdquo;</span>
+          </div>
+        )}
+
+        <p className="text-xs text-zinc-400 mt-1.5">
           {isListening
             ? 'Sebut angka apa saja (misal: "dua")'
             : 'Ketuk logo di atas untuk mengaktifkan suara'}

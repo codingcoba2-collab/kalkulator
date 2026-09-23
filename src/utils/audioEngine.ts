@@ -12,6 +12,7 @@ class AudioEngine {
   private wakeLock: any = null;
   private indonesianVoice: SpeechSynthesisVoice | null = null;
   private isPrewarmed = false;
+  private activeUtterance: SpeechSynthesisUtterance | null = null;
 
   constructor() {
     this.initVoices();
@@ -22,12 +23,10 @@ class AudioEngine {
 
     const findVoice = () => {
       const voices = window.speechSynthesis.getVoices();
-      // Look for id-ID voice first
       const idVoice = voices.find((v) => v.lang.startsWith('id') || v.lang.includes('ID'));
       if (idVoice) {
         this.indonesianVoice = idVoice;
       } else {
-        // Fallback to Google / Default clear voice
         this.indonesianVoice = voices.find((v) => v.default) || voices[0] || null;
       }
     };
@@ -50,13 +49,16 @@ class AudioEngine {
         await this.ctx.resume();
       }
 
-      // Prewarm speech synthesis with a silent/empty utterance
-      if ('speechSynthesis' in window && !this.isPrewarmed) {
-        const silentUtterance = new SpeechSynthesisUtterance(' ');
-        silentUtterance.volume = 0.01;
-        silentUtterance.rate = 2.0;
-        window.speechSynthesis.speak(silentUtterance);
-        this.isPrewarmed = true;
+      // Prewarm speech synthesis
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.resume();
+        if (!this.isPrewarmed) {
+          const silentUtterance = new SpeechSynthesisUtterance(' ');
+          silentUtterance.volume = 0.01;
+          silentUtterance.rate = 2.0;
+          window.speechSynthesis.speak(silentUtterance);
+          this.isPrewarmed = true;
+        }
       }
 
       this.startKeepAlive();
@@ -79,7 +81,7 @@ class AudioEngine {
       this.keepAliveGain = this.ctx.createGain();
       // Extremely low gain - strictly inaudible
       this.keepAliveGain.gain.setValueAtTime(0.00001, this.ctx.currentTime);
-      this.keepAliveOsc.frequency.setValueAtTime(20, this.ctx.currentTime); // sub-audible 20Hz
+      this.keepAliveOsc.frequency.setValueAtTime(20, this.ctx.currentTime);
       this.keepAliveOsc.connect(this.keepAliveGain);
       this.keepAliveGain.connect(this.ctx.destination);
       this.keepAliveOsc.start();
@@ -186,6 +188,121 @@ class AudioEngine {
     return data;
   }
 
+  public getMicrophoneStream(): MediaStream | null {
+    return this.micStream;
+  }
+
+  /**
+   * Records a short voice utterance with automatic silence detection
+   */
+  public recordVoiceUtterance(options: {
+    maxDurationMs?: number;
+    silenceThresholdMs?: number;
+    soundThreshold?: number;
+  } = {}): Promise<{ base64: string; mimeType: string } | null> {
+    const {
+      maxDurationMs = 1800,
+      silenceThresholdMs = 280,
+      soundThreshold = 0.055,
+    } = options;
+
+    return new Promise((resolve) => {
+      if (!this.micStream || typeof MediaRecorder === 'undefined') {
+        resolve(null);
+        return;
+      }
+
+      try {
+        let mimeType = '';
+        if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+          mimeType = 'audio/webm;codecs=opus';
+        } else if (MediaRecorder.isTypeSupported('audio/webm')) {
+          mimeType = 'audio/webm';
+        } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+          mimeType = 'audio/mp4';
+        }
+
+        const recorderOptions = mimeType ? { mimeType } : undefined;
+        const recorder = new MediaRecorder(this.micStream, recorderOptions);
+        const chunks: Blob[] = [];
+
+        recorder.ondataavailable = (e) => {
+          if (e.data && e.data.size > 0) {
+            chunks.push(e.data);
+          }
+        };
+
+        let resolved = false;
+        let pollTimer: any = null;
+        let maxTimeout: any = null;
+
+        const finish = () => {
+          if (resolved) return;
+          resolved = true;
+          if (pollTimer) clearInterval(pollTimer);
+          if (maxTimeout) clearTimeout(maxTimeout);
+
+          try {
+            if (recorder.state === 'recording') {
+              recorder.stop();
+            }
+          } catch {
+            // ignore
+          }
+        };
+
+        recorder.onstop = () => {
+          if (chunks.length === 0) {
+            resolve(null);
+            return;
+          }
+          const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            const resultStr = reader.result as string;
+            const base64 = resultStr.split(',')[1];
+            resolve({
+              base64,
+              mimeType: blob.type || 'audio/webm',
+            });
+          };
+          reader.onerror = () => resolve(null);
+          reader.readAsDataURL(blob);
+        };
+
+        recorder.start(100);
+
+        let hasSpoken = false;
+        let lastSoundTime = Date.now();
+
+        // Monitor audio levels via analyser for speech & silence
+        pollTimer = setInterval(() => {
+          const freqData = this.getAudioFrequencyData();
+          let sum = 0;
+          for (let i = 0; i < freqData.length; i++) {
+            sum += freqData[i];
+          }
+          const avg = freqData.length > 0 ? sum / freqData.length : 0;
+          const level = avg / 255;
+
+          const now = Date.now();
+          if (level > soundThreshold) {
+            hasSpoken = true;
+            lastSoundTime = now;
+          } else if (hasSpoken && now - lastSoundTime > silenceThresholdMs) {
+            // Speech ended and silence confirmed
+            finish();
+          }
+        }, 35);
+
+        maxTimeout = setTimeout(finish, maxDurationMs);
+      } catch (err) {
+        console.warn('recordVoiceUtterance error:', err);
+        resolve(null);
+      }
+    });
+  }
+
   /**
    * Instant low-latency recognition chime (<5ms latency)
    */
@@ -268,39 +385,55 @@ class AudioEngine {
   ): Promise<void> {
     return new Promise((resolve) => {
       if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+        options.onEnd?.();
         resolve();
         return;
       }
 
       try {
-        // Cancel any pending speech to maintain immediate responsiveness
         window.speechSynthesis.cancel();
+        window.speechSynthesis.resume();
 
         const utterance = new SpeechSynthesisUtterance(text);
+        this.activeUtterance = utterance; // Prevent GC collection
         utterance.lang = 'id-ID';
 
         if (this.indonesianVoice) {
           utterance.voice = this.indonesianVoice;
         }
 
-        // Tuned for natural, quick and crisp response
         utterance.rate = options.rate ?? 1.08;
         utterance.pitch = options.pitch ?? 1.0;
         utterance.volume = options.volume ?? 1.0;
+
+        let finished = false;
+        const finish = () => {
+          if (finished) return;
+          finished = true;
+          this.activeUtterance = null;
+          options.onEnd?.();
+          resolve();
+        };
+
+        // Safety watchdog timer to prevent speech engine hanging
+        const maxDuration = Math.max(1600, text.length * 180);
+        const watchdog = setTimeout(() => {
+          finish();
+        }, maxDuration);
 
         utterance.onstart = () => {
           options.onStart?.();
         };
 
         utterance.onend = () => {
-          options.onEnd?.();
-          resolve();
+          clearTimeout(watchdog);
+          finish();
         };
 
         utterance.onerror = (e) => {
           console.warn('SpeechSynthesis error:', e);
-          options.onEnd?.();
-          resolve();
+          clearTimeout(watchdog);
+          finish();
         };
 
         window.speechSynthesis.speak(utterance);

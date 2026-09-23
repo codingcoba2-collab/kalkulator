@@ -19,21 +19,38 @@ export function useVoiceCalculator() {
   const [lastCalculation, setLastCalculation] = useState<CalculationHistoryItem | null>(null);
   const [history, setHistory] = useState<CalculationHistoryItem[]>([]);
   const [volume, setVolume] = useState<number>(1.0);
-  const [speechRate, setSpeechRate] = useState<number>(1.08);
+  const [speechRate, setSpeechRate] = useState<number>(1.18); // snappy, clear speech
   const [mode, setMode] = useState<ModeType>('short');
   const [isSupported, setIsSupported] = useState<boolean>(true);
   const [lastDetectedTranscript, setLastDetectedTranscript] = useState<string>('');
-  const [statusMessage, setStatusMessage] = useState<string>('Ketuk untuk mengaktifkan');
+  const [statusMessage, setStatusMessage] = useState<string>('Ketuk logo untuk mendengarkan');
   const [audioLevel, setAudioLevel] = useState<number>(0);
 
+  // Persistent refs to avoid closure staleness and feedback loops
   const recognitionRef = useRef<any>(null);
   const isListeningRef = useRef<boolean>(false);
   const isSpeakingRef = useRef<boolean>(false);
+  const isProcessingRef = useRef<boolean>(false);
+  const isVadBusyRef = useRef<boolean>(false);
   const lastProcessedTimeRef = useRef<number>(0);
-  const lastProcessedTextRef = useRef<string>('');
+  const lastProcessedNumRef = useRef<number | null>(null);
+  const lastSpokenResultWordsRef = useRef<string[]>([]);
   const animFrameRef = useRef<number | null>(null);
+  const restartTimeoutRef = useRef<any>(null);
+  const cooldownUntilRef = useRef<number>(0);
 
-  // Keep ref synchronized
+  const modeRef = useRef<ModeType>(mode);
+  modeRef.current = mode;
+
+  const speechRateRef = useRef<number>(speechRate);
+  speechRateRef.current = speechRate;
+
+  const volumeRef = useRef<number>(volume);
+  volumeRef.current = volume;
+
+  const lastCalculationRef = useRef<CalculationHistoryItem | null>(lastCalculation);
+  lastCalculationRef.current = lastCalculation;
+
   useEffect(() => {
     isListeningRef.current = isListening;
   }, [isListening]);
@@ -42,55 +59,67 @@ export function useVoiceCalculator() {
     isSpeakingRef.current = isSpeaking;
   }, [isSpeaking]);
 
-  // Audio visualizer frequency polling loop
   useEffect(() => {
-    let active = true;
-    const updateMeter = () => {
-      if (!active) return;
-      if (isListeningRef.current) {
-        const data = audioEngine.getAudioFrequencyData();
-        // Compute average frequency power
-        let sum = 0;
-        for (let i = 0; i < data.length; i++) {
-          sum += data[i];
-        }
-        const avg = data.length > 0 ? sum / data.length : 0;
-        // Normalize 0..1 with non-linear boost for responsiveness
-        const norm = Math.min(1, Math.pow(avg / 120, 1.2));
-        setAudioLevel(norm);
-      } else {
-        setAudioLevel((prev) => Math.max(0, prev * 0.85));
-      }
-      animFrameRef.current = requestAnimationFrame(updateMeter);
-    };
+    isProcessingRef.current = isProcessing;
+  }, [isProcessing]);
 
-    animFrameRef.current = requestAnimationFrame(updateMeter);
-    return () => {
-      active = false;
-      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
-    };
+  // Restart speech recognition safely
+  const restartRecognition = useCallback(() => {
+    if (!isListeningRef.current || isSpeakingRef.current) return;
+    if (restartTimeoutRef.current) clearTimeout(restartTimeoutRef.current);
+
+    restartTimeoutRef.current = setTimeout(() => {
+      if (!isListeningRef.current || isSpeakingRef.current) return;
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.start();
+        } catch {
+          // already running or transient state
+        }
+      }
+    }, 60);
   }, []);
 
-  // Process numeric input and immediately speak the x2 result
+  // Safe executor: processes number input and speaks result exactly ONCE
   const processNumber = useCallback(
     async (numberInput: number, sourceTranscript: string = '') => {
       const now = Date.now();
-      // Guard against rapid duplicate trigger within 1.2 seconds for identical number
+
+      // Guard 1: Feedback loop cooldown (ignore if app is speaking or just finished speaking)
+      if (now < cooldownUntilRef.current || isSpeakingRef.current) {
+        return;
+      }
+
+      // Guard 2: If the detected word matches what the app JUST spoke (e.g. "empat" after 2x2), DROP IT!
+      const lowerSource = sourceTranscript.toLowerCase().trim();
+      if (lastSpokenResultWordsRef.current.some((w) => lowerSource.includes(w))) {
+        return;
+      }
+
+      // Guard 3: Prevent rapid repeat of identical number within 1400ms
       if (
-        now - lastProcessedTimeRef.current < 1200 &&
-        lastProcessedTextRef.current === String(numberInput)
+        now - lastProcessedTimeRef.current < 1400 &&
+        lastProcessedNumRef.current === numberInput
       ) {
         return;
       }
 
       lastProcessedTimeRef.current = now;
-      lastProcessedTextRef.current = String(numberInput);
+      lastProcessedNumRef.current = numberInput;
 
       setIsProcessing(true);
-      audioEngine.haptic([20, 40, 20]);
+      audioEngine.haptic([25, 35]);
       audioEngine.playDetectPing();
 
-      const output = formatSpeechOutput(numberInput, mode);
+      // Calculate strictly input * 2
+      const output = formatSpeechOutput(numberInput, modeRef.current);
+
+      // Track spoken words to avoid speaker self-feedback
+      const spokenWords = output.words.toLowerCase().split(/\s+/);
+      lastSpokenResultWordsRef.current = [
+        ...spokenWords,
+        String(output.resultNum),
+      ];
 
       const newItem: CalculationHistoryItem = {
         id: Math.random().toString(36).substring(2, 9),
@@ -104,26 +133,167 @@ export function useVoiceCalculator() {
       setHistory((prev) => [newItem, ...prev.slice(0, 19)]);
       setStatusMessage(`${numberInput} × 2 = ${output.resultNum}`);
 
-      // Speak immediately with Indonesian voice
       setIsProcessing(false);
       setIsSpeaking(true);
 
+      // Lock microphone recognition during speech + 450ms decay
+      cooldownUntilRef.current = now + 4000; // temporary high lock, will be reset on speech end
+
+      // Temporarily abort recognition so it doesn't hear device speaker
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.abort();
+        } catch {
+          // ignore
+        }
+      }
+
       await audioEngine.speak(output.spokenText, {
-        rate: speechRate,
-        volume: volume,
-        onStart: () => setIsSpeaking(true),
+        rate: speechRateRef.current,
+        volume: volumeRef.current,
+        onStart: () => {
+          setIsSpeaking(true);
+        },
         onEnd: () => {
           setIsSpeaking(false);
+          // Set cooldown to prevent speaker echo decay
+          cooldownUntilRef.current = Date.now() + 450;
           if (isListeningRef.current) {
-            setStatusMessage('Mendengarkan...');
+            setStatusMessage('Mendengarkan suara...');
+            restartRecognition();
           }
         },
       });
     },
-    [mode, speechRate, volume]
+    [restartRecognition]
   );
 
-  // Initialize Web Speech Recognition
+  const processNumberRef = useRef(processNumber);
+  processNumberRef.current = processNumber;
+
+  // Ultra-Fast VAD Fallback: records short utterance and transcribes via server
+  const triggerVadCapture = useCallback(async () => {
+    const now = Date.now();
+    if (
+      isVadBusyRef.current ||
+      isSpeakingRef.current ||
+      isProcessingRef.current ||
+      !isListeningRef.current ||
+      now < cooldownUntilRef.current
+    ) {
+      return;
+    }
+
+    isVadBusyRef.current = true;
+    try {
+      const result = await audioEngine.recordVoiceUtterance({
+        silenceThresholdMs: 220,
+        maxDurationMs: 1200,
+        soundThreshold: 0.06,
+      });
+
+      if (isSpeakingRef.current || !isListeningRef.current) {
+        return;
+      }
+
+      if (result && result.base64) {
+        const res = await fetch('/api/transcribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            audioData: result.base64,
+            mimeType: result.mimeType,
+          }),
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          if (isSpeakingRef.current) return;
+
+          let num = data?.number;
+          if ((num === null || num === undefined) && data?.raw) {
+            num = parseSpokenNumber(data.raw);
+          }
+
+          if (typeof num === 'number' && !isNaN(num)) {
+            setLastDetectedTranscript(data.raw || String(num));
+            processNumberRef.current(num, data.raw || String(num));
+          } else if (data?.raw) {
+            setLastDetectedTranscript(data.raw);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('VAD capture notice:', e);
+    } finally {
+      isVadBusyRef.current = false;
+      if (isListeningRef.current && !isSpeakingRef.current && !isProcessingRef.current) {
+        setStatusMessage('Mendengarkan suara...');
+      }
+    }
+  }, []);
+
+  const triggerVadCaptureRef = useRef(triggerVadCapture);
+  triggerVadCaptureRef.current = triggerVadCapture;
+
+  // Real-time audio meter and VAD trigger loop
+  useEffect(() => {
+    let active = true;
+    const updateMeter = () => {
+      if (!active) return;
+      if (isListeningRef.current) {
+        const data = audioEngine.getAudioFrequencyData();
+        let sum = 0;
+        for (let i = 0; i < data.length; i++) {
+          sum += data[i];
+        }
+        const avg = data.length > 0 ? sum / data.length : 0;
+        const norm = Math.min(1, Math.pow(avg / 110, 1.2));
+        setAudioLevel(norm);
+
+        // If sound detected, not busy, and not in cooldown
+        if (
+          norm > 0.08 &&
+          !isVadBusyRef.current &&
+          !isSpeakingRef.current &&
+          !isProcessingRef.current &&
+          Date.now() > cooldownUntilRef.current
+        ) {
+          triggerVadCaptureRef.current();
+        }
+      } else {
+        setAudioLevel((prev) => Math.max(0, prev * 0.85));
+      }
+      animFrameRef.current = requestAnimationFrame(updateMeter);
+    };
+
+    animFrameRef.current = requestAnimationFrame(updateMeter);
+    return () => {
+      active = false;
+      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+    };
+  }, []);
+
+  const repeatLastAnswer = useCallback(() => {
+    const item = lastCalculationRef.current;
+    if (!item) {
+      audioEngine.speak('Belum ada perhitungan sebelumnya');
+      return;
+    }
+    audioEngine.playGestureTone('repeat');
+    audioEngine.haptic([15, 40]);
+    audioEngine.speak(item.spokenOutput, {
+      rate: speechRateRef.current,
+      volume: volumeRef.current,
+      onStart: () => setIsSpeaking(true),
+      onEnd: () => setIsSpeaking(false),
+    });
+  }, []);
+
+  const repeatLastAnswerRef = useRef(repeatLastAnswer);
+  repeatLastAnswerRef.current = repeatLastAnswer;
+
+  // Initialize Web Speech Recognition (Engine A) with rapid single-utterance mode
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
@@ -131,14 +301,14 @@ export function useVoiceCalculator() {
       (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
     if (!SpeechRecognition) {
-      setIsSupported(false);
-      setStatusMessage('Web Speech API tidak didukung pada browser ini');
+      setIsSupported(true); // VAD engine handles it
       return;
     }
 
     try {
       const rec = new SpeechRecognition();
-      rec.continuous = true;
+      // Using continuous = false allows mobile browsers to return single-word commands in ~150ms!
+      rec.continuous = false;
       rec.interimResults = true;
       rec.lang = 'id-ID';
       rec.maxAlternatives = 3;
@@ -149,73 +319,77 @@ export function useVoiceCalculator() {
       };
 
       rec.onresult = (event: any) => {
-        // If the app is currently speaking its own answer, suppress microphone feedback
-        if (isSpeakingRef.current) return;
+        if (isSpeakingRef.current || Date.now() < cooldownUntilRef.current) return;
 
-        let transcript = '';
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          transcript += event.results[i][0].transcript;
-        }
-
-        const trimmed = transcript.trim();
-        if (!trimmed) return;
-
-        setLastDetectedTranscript(trimmed);
-
-        // Check if user is asking to repeat: "ulang", "ulangi"
-        if (/\b(ulang|ulangi|lagi|apa tadi)\b/i.test(trimmed)) {
-          if (lastCalculation) {
-            repeatLastAnswer();
-            return;
+        const candidates: string[] = [];
+        for (let i = 0; i < event.results.length; i++) {
+          const res = event.results[i];
+          for (let j = 0; j < res.length; j++) {
+            const tr = res[j]?.transcript?.trim();
+            if (tr && !candidates.includes(tr)) {
+              candidates.push(tr);
+            }
           }
         }
 
-        const parsed = parseSpokenNumber(trimmed);
-        if (parsed !== null) {
-          processNumber(parsed, trimmed);
+        if (candidates.length === 0) return;
+
+        const primaryText = candidates[0];
+        setLastDetectedTranscript(primaryText);
+
+        // Check for repeat voice trigger
+        if (/\b(ulang|ulangi|lagi|apa tadi)\b/i.test(primaryText)) {
+          repeatLastAnswerRef.current();
+          return;
+        }
+
+        // Try extracting number
+        let foundNumber: number | null = null;
+        for (const phrase of candidates) {
+          const parsed = parseSpokenNumber(phrase);
+          if (parsed !== null) {
+            foundNumber = parsed;
+            break;
+          }
+        }
+
+        if (foundNumber !== null) {
+          processNumberRef.current(foundNumber, primaryText);
+        } else if (primaryText.length > 2) {
+          setStatusMessage(`Mendengar: "${primaryText}"`);
         }
       };
 
       rec.onerror = (e: any) => {
-        console.warn('SpeechRecognition error:', e.error);
-        if (e.error === 'not-allowed') {
-          setIsListening(false);
-          setStatusMessage('Izin mikrofon diperlukan');
-        } else if (e.error === 'no-speech') {
-          // Normal timeout, continue
+        console.warn('SpeechRecognition notice:', e.error);
+        if (isListeningRef.current && !isSpeakingRef.current) {
+          restartRecognition();
         }
       };
 
       rec.onend = () => {
-        // If still supposed to be listening (continuous mode), restart gracefully
-        if (isListeningRef.current) {
-          try {
-            rec.start();
-          } catch {
-            setIsListening(false);
-          }
-        } else {
-          setIsListening(false);
-          setStatusMessage('Mikrofon nonaktif');
+        // In continuous=false mode, it ends after each utterance; restart immediately
+        if (isListeningRef.current && !isSpeakingRef.current) {
+          restartRecognition();
         }
       };
 
       recognitionRef.current = rec;
     } catch (e) {
-      console.error('Failed to init speech recognition:', e);
-      setIsSupported(false);
+      console.warn('Speech recognition setup warning:', e);
     }
 
     return () => {
+      if (restartTimeoutRef.current) clearTimeout(restartTimeoutRef.current);
       if (recognitionRef.current) {
         try {
-          recognitionRef.current.stop();
+          recognitionRef.current.abort();
         } catch {
           // ignore
         }
       }
     };
-  }, [processNumber, lastCalculation]);
+  }, [restartRecognition]);
 
   // Start continuous listening
   const startListening = async () => {
@@ -229,14 +403,15 @@ export function useVoiceCalculator() {
       () => repeatLastAnswer()
     );
 
+    isListeningRef.current = true;
+    setIsListening(true);
+    setStatusMessage('Mendengarkan suara...');
+
     if (recognitionRef.current) {
       try {
-        isListeningRef.current = true;
-        setIsListening(true);
         recognitionRef.current.start();
-      } catch (err) {
-        // Recognition might already be started
-        console.warn('Recognition start warn:', err);
+      } catch {
+        // already started or not available
       }
     }
   };
@@ -249,12 +424,12 @@ export function useVoiceCalculator() {
     audioEngine.haptic(15);
     if (recognitionRef.current) {
       try {
-        recognitionRef.current.stop();
+        recognitionRef.current.abort();
       } catch {
         // ignore
       }
     }
-    setStatusMessage('Ketuk untuk mendengarkan');
+    setStatusMessage('Ketuk logo untuk mendengarkan');
   };
 
   // Toggle listening
@@ -266,26 +441,10 @@ export function useVoiceCalculator() {
     }
   };
 
-  // Repeat last calculation result aloud
-  const repeatLastAnswer = useCallback(() => {
-    if (!lastCalculation) {
-      audioEngine.speak('Belum ada perhitungan sebelumnya');
-      return;
-    }
-    audioEngine.playGestureTone('repeat');
-    audioEngine.haptic([15, 40]);
-    audioEngine.speak(lastCalculation.spokenOutput, {
-      rate: speechRate,
-      volume: volume,
-      onStart: () => setIsSpeaking(true),
-      onEnd: () => setIsSpeaking(false),
-    });
-  }, [lastCalculation, speechRate, volume]);
-
-  // Gestures helpers
+  // Speed controls
   const increaseSpeed = () => {
     setSpeechRate((r) => {
-      const next = Math.min(1.5, Math.round((r + 0.1) * 10) / 10);
+      const next = Math.min(1.6, Math.round((r + 0.1) * 10) / 10);
       audioEngine.playGestureTone('up');
       audioEngine.haptic(15);
       return next;
