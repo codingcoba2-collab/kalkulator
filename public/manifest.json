@@ -1,0 +1,26 @@
+{
+  "id": "/",
+  "name": "Dashera Voice Multiplier x2",
+  "short_name": "Dashera x2",
+  "description": "Aplikasi kalkulator audio murni instan khusus perkalian 2 dengan respons suara real-time, kontrol gestur satu genggaman, dan dukungan latar belakang.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#09090b",
+  "theme_color": "#09090b",
+  "icons": [
+    {
+      "src": "/pwa-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

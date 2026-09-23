@@ -1,0 +1,6 @@
+{
+  "name": "Dashera Voice Multiplier x2",
+  "description": "Aplikasi kalkulator audio murni instan khusus perkalian 2 dengan respons suara real-time, kontrol gestur satu genggaman, dan dukungan latar belakang.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
