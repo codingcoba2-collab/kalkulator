@@ -1,13 +1,18 @@
 import React from 'react';
+import { Mic, AlertTriangle, CheckCircle, Volume2, Sparkles } from 'lucide-react';
 
 interface AudioOrbProps {
   isListening: boolean;
   isSpeaking: boolean;
   isProcessing: boolean;
   audioLevel: number; // 0 to 1
+  decibels?: number;
+  micSensorError?: string | null;
   onClick: () => void;
   statusText: string;
   liveTranscript?: string;
+  detectedNumber?: number | null;
+  onOpenResultPopUp?: () => void;
 }
 
 export const AudioOrb: React.FC<AudioOrbProps> = ({
@@ -15,35 +20,52 @@ export const AudioOrb: React.FC<AudioOrbProps> = ({
   isSpeaking,
   isProcessing,
   audioLevel,
+  decibels = -60,
+  micSensorError,
   onClick,
   statusText,
   liveTranscript,
+  detectedNumber,
+  onOpenResultPopUp,
 }) => {
-  // Compute dynamic scale and glow based on audio level
-  const reactiveScale = 1 + audioLevel * 0.22;
+  // Compute dynamic scale and glow based on real audio level
+  const reactiveScale = 1 + audioLevel * 0.24;
   const glowOpacity = Math.min(1, 0.35 + audioLevel * 0.65);
 
-  let stateColor = 'from-zinc-700 to-zinc-900 border-zinc-700/60';
   let ringGlow = 'rgba(255, 255, 255, 0.15)';
   let auraColor = 'from-zinc-500/20 via-zinc-400/10 to-transparent';
 
   if (isSpeaking) {
-    stateColor = 'from-cyan-600 via-sky-600 to-blue-900 border-cyan-400/80';
-    ringGlow = 'rgba(56, 189, 248, 0.65)';
+    ringGlow = 'rgba(56, 189, 248, 0.7)';
     auraColor = 'from-cyan-500/40 via-blue-500/20 to-transparent';
   } else if (isProcessing) {
-    stateColor = 'from-amber-600 to-orange-900 border-amber-400/80';
-    ringGlow = 'rgba(251, 191, 36, 0.65)';
+    ringGlow = 'rgba(251, 191, 36, 0.7)';
     auraColor = 'from-amber-500/35 via-orange-500/15 to-transparent';
   } else if (isListening) {
-    stateColor = 'from-slate-700 via-cyan-950 to-zinc-900 border-cyan-400/50';
-    ringGlow = 'rgba(56, 189, 248, 0.45)';
+    ringGlow = 'rgba(56, 189, 248, 0.5)';
     auraColor = 'from-cyan-400/30 via-slate-500/15 to-transparent';
   }
 
   return (
-    <div className="relative flex flex-col items-center justify-center select-none my-auto">
-      {/* Outer Soundwave Pulsing Rings (Active when listening or speaking) */}
+    <div className="relative flex flex-col items-center justify-center select-none my-auto w-full">
+      {/* Mic Sensor Error Diagnostic Box (Fixes "sensor suara dari mikrofon tidak terbaca") */}
+      {micSensorError && (
+        <div
+          onClick={onClick}
+          className="mb-3 px-4 py-2.5 rounded-2xl bg-rose-950/80 border border-rose-500/50 text-rose-200 text-xs shadow-xl flex items-center gap-2 max-w-sm text-left cursor-pointer hover:bg-rose-900/80 transition-all active:scale-95 animate-in fade-in"
+        >
+          <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+          <div className="flex-1">
+            <p className="font-semibold text-white">Sensor Mikrofon Tidak Terbaca</p>
+            <p className="text-[11px] text-rose-300/90">{micSensorError}</p>
+            <p className="text-[10px] text-cyan-300 font-medium underline mt-0.5">
+              Ketuk di sini untuk mencoba ulang izin mikrofon
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Outer Soundwave Pulsing Rings */}
       {(isListening || isSpeaking) && (
         <>
           <div
@@ -68,12 +90,12 @@ export const AudioOrb: React.FC<AudioOrbProps> = ({
         </>
       )}
 
-      {/* Main Touch-Friendly Central Orb */}
+      {/* Main Central Touch Orb */}
       <button
         type="button"
         onClick={onClick}
         aria-label={isListening ? 'Hentikan Mendengarkan' : 'Mulai Mendengarkan'}
-        className="relative group w-52 h-52 sm:w-60 sm:h-60 rounded-full flex items-center justify-center cursor-pointer transition-transform duration-150 active:scale-95 focus:outline-none focus-visible:ring-4 focus-visible:ring-cyan-400/60"
+        className="relative group w-48 h-48 sm:w-56 sm:h-56 rounded-full flex items-center justify-center cursor-pointer transition-transform duration-150 active:scale-95 focus:outline-none focus-visible:ring-4 focus-visible:ring-cyan-400/60"
         style={{
           transform: `scale(${isListening || isSpeaking ? reactiveScale : 1})`,
         }}
@@ -100,9 +122,8 @@ export const AudioOrb: React.FC<AudioOrbProps> = ({
               <img
                 src="/dashera-logo.png"
                 alt="Dashera Emblem"
-                className="w-28 h-28 sm:w-32 sm:h-32 object-contain drop-shadow-[0_8px_20px_rgba(0,0,0,0.9)] transition-all duration-300 group-hover:scale-105"
+                className="w-24 h-24 sm:w-28 sm:h-28 object-contain drop-shadow-[0_8px_20px_rgba(0,0,0,0.9)] transition-all duration-300 group-hover:scale-105"
                 onError={(e) => {
-                  // Fallback to stylized SVG emblem if image asset is unavailable
                   (e.target as HTMLElement).style.display = 'none';
                 }}
               />
@@ -116,7 +137,7 @@ export const AudioOrb: React.FC<AudioOrbProps> = ({
           </div>
         </div>
 
-        {/* Corner Pulse Accent */}
+        {/* Dynamic Status Pill */}
         <div
           className={`absolute -bottom-2 px-3 py-1 rounded-full text-[11px] font-semibold tracking-wider uppercase backdrop-blur-md border shadow-lg transition-all ${
             isSpeaking
@@ -133,28 +154,82 @@ export const AudioOrb: React.FC<AudioOrbProps> = ({
             : isProcessing
             ? 'Menghitung'
             : isListening
-            ? 'Mendengarkan'
+            ? 'Sensor Aktif'
             : 'Standby'}
         </div>
       </button>
 
-      {/* Immediate Audio Feedback Status Label */}
-      <div className="mt-7 text-center max-w-xs px-4">
-        <p className="text-base font-semibold text-zinc-100 tracking-tight transition-colors duration-200">
+      {/* Real-Time Microphone Sensor Level Meter & Decibels */}
+      {isListening && !micSensorError && (
+        <div className="mt-5 flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-zinc-900/80 border border-zinc-800 text-[11px] text-zinc-300">
+          <span className="text-zinc-400">Sensor Suara:</span>
+          {/* Animated 5-bar equalizer showing real input sensitivity */}
+          <div className="flex items-end gap-1 h-3.5 px-1">
+            <span
+              className="w-1 bg-cyan-400 rounded-full transition-all duration-75"
+              style={{ height: `${Math.max(20, audioLevel * 100)}%` }}
+            />
+            <span
+              className="w-1 bg-cyan-400 rounded-full transition-all duration-75"
+              style={{ height: `${Math.max(30, audioLevel * 130)}%` }}
+            />
+            <span
+              className="w-1 bg-cyan-400 rounded-full transition-all duration-75"
+              style={{ height: `${Math.max(40, audioLevel * 160)}%` }}
+            />
+            <span
+              className="w-1 bg-cyan-300 rounded-full transition-all duration-75"
+              style={{ height: `${Math.max(25, audioLevel * 120)}%` }}
+            />
+            <span
+              className="w-1 bg-cyan-300 rounded-full transition-all duration-75"
+              style={{ height: `${Math.max(20, audioLevel * 90)}%` }}
+            />
+          </div>
+          <span className="font-mono text-cyan-300 text-[10px]">
+            {audioLevel > 0.05 ? `${Math.max(-50, decibels)} dB` : 'Menunggu Suara'}
+          </span>
+        </div>
+      )}
+
+      {/* Voice Reading to Number Display: "baca suara dan tulis menjadi angka" */}
+      <div className="mt-3 text-center max-w-sm px-4">
+        <p className="text-base font-bold text-zinc-100 tracking-tight transition-colors duration-200">
           {statusText}
         </p>
 
-        {isListening && liveTranscript && (
-          <div className="mt-2 inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-cyan-950/40 border border-cyan-500/30 text-[11px] text-cyan-300 animate-in fade-in zoom-in-95 duration-150">
-            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
-            <span className="truncate max-w-[200px]">Suara: &ldquo;{liveTranscript}&rdquo;</span>
+        {/* Live Detected Transcription & Converted Number Badge */}
+        {liveTranscript && (
+          <div className="mt-2 flex flex-col items-center gap-1">
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-xl bg-zinc-900/90 border border-zinc-700/80 text-xs animate-in fade-in zoom-in-95 duration-150">
+              <span className="text-zinc-400">Suara:</span>
+              <span className="text-cyan-300 font-semibold truncate max-w-[170px]">
+                &ldquo;{liveTranscript}&rdquo;
+              </span>
+              {detectedNumber !== null && detectedNumber !== undefined && (
+                <span className="ml-1 px-2 py-0.5 rounded-md bg-cyan-500/20 border border-cyan-400/40 text-white font-mono font-bold">
+                  ➔ {detectedNumber}
+                </span>
+              )}
+            </div>
+
+            {detectedNumber !== null && detectedNumber !== undefined && (
+              <button
+                type="button"
+                onClick={onOpenResultPopUp}
+                className="mt-1 inline-flex items-center gap-1.5 text-[11px] text-cyan-400 hover:text-cyan-300 underline font-medium cursor-pointer"
+              >
+                <Sparkles className="w-3 h-3 text-cyan-400" />
+                <span>Lihat Pop-up Hasil × 2</span>
+              </button>
+            )}
           </div>
         )}
 
-        <p className="text-xs text-zinc-400 mt-1.5">
+        <p className="text-xs text-zinc-400 mt-2">
           {isListening
-            ? 'Sebut angka apa saja (misal: "dua")'
-            : 'Ketuk logo di atas untuk mengaktifkan suara'}
+            ? 'Sebut angka bebas (misal: "dua puluh lima" atau "50")'
+            : 'Ketuk logo atau tombol di bawah untuk menyalakan suara'}
         </p>
       </div>
     </div>

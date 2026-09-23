@@ -1,18 +1,30 @@
 /**
  * Ultra-Low Latency Web Audio & Speech Engine
- * Designed for immediate audio-first feedback and background persistence
+ * Designed for immediate audio-first feedback, background persistence,
+ * and resilient microphone sensor reading.
  */
+
+export interface MicrophoneStatus {
+  hasPermission: boolean;
+  isStreaming: boolean;
+  errorMessage: string | null;
+  sensorLevel: number; // 0 to 1
+  decibels: number; // approximate dB
+}
 
 class AudioEngine {
   private ctx: AudioContext | null = null;
   private micStream: MediaStream | null = null;
   private analyser: AnalyserNode | null = null;
+  private micGain: GainNode | null = null;
+  private micSource: MediaStreamAudioSourceNode | null = null;
   private keepAliveGain: GainNode | null = null;
   private keepAliveOsc: OscillatorNode | null = null;
   private wakeLock: any = null;
   private indonesianVoice: SpeechSynthesisVoice | null = null;
   private isPrewarmed = false;
   private activeUtterance: SpeechSynthesisUtterance | null = null;
+  private lastMicError: string | null = null;
 
   constructor() {
     this.initVoices();
@@ -22,12 +34,16 @@ class AudioEngine {
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
 
     const findVoice = () => {
-      const voices = window.speechSynthesis.getVoices();
-      const idVoice = voices.find((v) => v.lang.startsWith('id') || v.lang.includes('ID'));
-      if (idVoice) {
-        this.indonesianVoice = idVoice;
-      } else {
-        this.indonesianVoice = voices.find((v) => v.default) || voices[0] || null;
+      try {
+        const voices = window.speechSynthesis.getVoices();
+        const idVoice = voices.find((v) => v.lang.startsWith('id') || v.lang.includes('ID'));
+        if (idVoice) {
+          this.indonesianVoice = idVoice;
+        } else {
+          this.indonesianVoice = voices.find((v) => v.default) || voices[0] || null;
+        }
+      } catch (e) {
+        console.warn('Voice init warning:', e);
       }
     };
 
@@ -51,13 +67,17 @@ class AudioEngine {
 
       // Prewarm speech synthesis
       if ('speechSynthesis' in window) {
-        window.speechSynthesis.resume();
-        if (!this.isPrewarmed) {
-          const silentUtterance = new SpeechSynthesisUtterance(' ');
-          silentUtterance.volume = 0.01;
-          silentUtterance.rate = 2.0;
-          window.speechSynthesis.speak(silentUtterance);
-          this.isPrewarmed = true;
+        try {
+          window.speechSynthesis.resume();
+          if (!this.isPrewarmed) {
+            const silentUtterance = new SpeechSynthesisUtterance(' ');
+            silentUtterance.volume = 0.01;
+            silentUtterance.rate = 2.0;
+            window.speechSynthesis.speak(silentUtterance);
+            this.isPrewarmed = true;
+          }
+        } catch {
+          // ignore
         }
       }
 
@@ -79,7 +99,6 @@ class AudioEngine {
     try {
       this.keepAliveOsc = this.ctx.createOscillator();
       this.keepAliveGain = this.ctx.createGain();
-      // Extremely low gain - strictly inaudible
       this.keepAliveGain.gain.setValueAtTime(0.00001, this.ctx.currentTime);
       this.keepAliveOsc.frequency.setValueAtTime(20, this.ctx.currentTime);
       this.keepAliveOsc.connect(this.keepAliveGain);
@@ -102,7 +121,7 @@ class AudioEngine {
         });
       }
     } catch {
-      // Wake lock might be rejected on battery saver, ignore
+      // Wake lock might be rejected on battery saver
     }
   }
 
@@ -150,42 +169,149 @@ class AudioEngine {
   }
 
   /**
-   * Connect microphone to AnalyserNode for audio visualization
+   * Connects microphone to AnalyserNode with hardware gain booster
+   * Solves: sensor suara mikrofon tidak terbaca / volume mic HP terlalu kecil
    */
-  public async setupMicrophoneAnalyser(): Promise<AnalyserNode | null> {
-    if (this.analyser) return this.analyser;
+  public async setupMicrophoneAnalyser(): Promise<{ analyser: AnalyserNode | null; error: string | null }> {
+    if (this.analyser && this.micStream && this.micStream.active) {
+      const activeTracks = this.micStream.getAudioTracks().filter((t) => t.readyState === 'live');
+      if (activeTracks.length > 0) {
+        return { analyser: this.analyser, error: null };
+      }
+    }
 
     try {
       await this.prewarm();
-      if (!this.ctx) return null;
 
-      const stream = await navigator.mediaDevices.getUserMedia({
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        this.lastMicError = 'Peramban tidak mendukung akses mikrofon (MediaDevices API tidak tersedia).';
+        return { analyser: null, error: this.lastMicError };
+      }
+
+      // Explicit audio capture constraints for crystal clear voice detection
+      const constraints: MediaStreamConstraints = {
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
+          channelCount: 1,
         },
-      });
+      };
 
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
       this.micStream = stream;
+      this.lastMicError = null;
+
+      if (!this.ctx) {
+        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+        this.ctx = new AudioCtx();
+      }
+
+      if (this.ctx.state === 'suspended') {
+        await this.ctx.resume();
+      }
+
+      // Cleanup old source if any
+      if (this.micSource) {
+        try {
+          this.micSource.disconnect();
+        } catch {
+          // ignore
+        }
+      }
+
       const source = this.ctx.createMediaStreamSource(stream);
+      this.micSource = source;
+
+      // Add high sensitivity gain booster so quiet phone mics are clearly detected
+      const gain = this.ctx.createGain();
+      gain.gain.setValueAtTime(2.2, this.ctx.currentTime);
+      this.micGain = gain;
+
       const analyser = this.ctx.createAnalyser();
-      analyser.fftSize = 64;
-      analyser.smoothingTimeConstant = 0.8;
-      source.connect(analyser);
+      analyser.fftSize = 128; // Responsive 64 frequency bins
+      analyser.smoothingTimeConstant = 0.75;
+
+      source.connect(gain);
+      gain.connect(analyser);
+
       this.analyser = analyser;
-      return analyser;
-    } catch (err) {
-      console.warn('Microphone stream error:', err);
-      return null;
+      return { analyser, error: null };
+    } catch (err: any) {
+      let friendlyMessage = 'Gagal mengakses mikrofon.';
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+        friendlyMessage = 'Izin mikrofon belum diberikan. Harap aktifkan izin mikrofon di setelan browser.';
+      } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+        friendlyMessage = 'Sensor mikrofon fisik tidak ditemukan pada perangkat ini.';
+      } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
+        friendlyMessage = 'Sensor mikrofon sedang dipakai oleh aplikasi lain atau terkunci.';
+      } else if (err.name === 'SecurityError') {
+        friendlyMessage = 'Akses mikrofon dibatasi oleh peramban.';
+      }
+      this.lastMicError = friendlyMessage;
+      console.warn('setupMicrophoneAnalyser error:', err);
+      return { analyser: null, error: friendlyMessage };
     }
   }
 
+  /**
+   * Explicitly prompts user for microphone permission
+   */
+  public async requestMicrophonePermission(): Promise<{ granted: boolean; error: string | null }> {
+    const res = await this.setupMicrophoneAnalyser();
+    return {
+      granted: Boolean(res.analyser),
+      error: res.error,
+    };
+  }
+
+  /**
+   * Reads raw frequency data from the microphone sensor
+   */
   public getAudioFrequencyData(): Uint8Array {
-    if (!this.analyser) return new Uint8Array(32);
+    if (!this.analyser) return new Uint8Array(64);
     const data = new Uint8Array(this.analyser.frequencyBinCount);
     this.analyser.getByteFrequencyData(data);
     return data;
+  }
+
+  /**
+   * Computes normalized sound level (0 to 1) and approximate decibels (-60 to 0 dB)
+   */
+  public getMicrophoneStatus(): MicrophoneStatus {
+    const isStreaming = Boolean(
+      this.micStream &&
+      this.micStream.active &&
+      this.micStream.getAudioTracks().some((t) => t.readyState === 'live' && t.enabled)
+    );
+
+    if (!isStreaming || !this.analyser) {
+      return {
+        hasPermission: !this.lastMicError,
+        isStreaming: false,
+        errorMessage: this.lastMicError,
+        sensorLevel: 0,
+        decibels: -60,
+      };
+    }
+
+    const freqData = this.getAudioFrequencyData();
+    let sum = 0;
+    for (let i = 0; i < freqData.length; i++) {
+      sum += freqData[i];
+    }
+    const avg = freqData.length > 0 ? sum / freqData.length : 0;
+    // Map avg (0-255) to 0-1 with sensitive gamma
+    const sensorLevel = Math.min(1, Math.pow(avg / 100, 1.15));
+    const decibels = avg > 0 ? Math.round(20 * Math.log10(avg / 255)) : -60;
+
+    return {
+      hasPermission: true,
+      isStreaming: true,
+      errorMessage: null,
+      sensorLevel,
+      decibels,
+    };
   }
 
   public getMicrophoneStream(): MediaStream | null {
@@ -201,9 +327,9 @@ class AudioEngine {
     soundThreshold?: number;
   } = {}): Promise<{ base64: string; mimeType: string } | null> {
     const {
-      maxDurationMs = 1800,
-      silenceThresholdMs = 280,
-      soundThreshold = 0.055,
+      maxDurationMs = 2500,
+      silenceThresholdMs = 380,
+      soundThreshold = 0.05,
     } = options;
 
     return new Promise((resolve) => {
@@ -290,7 +416,6 @@ class AudioEngine {
             hasSpoken = true;
             lastSoundTime = now;
           } else if (hasSpoken && now - lastSoundTime > silenceThresholdMs) {
-            // Speech ended and silence confirmed
             finish();
           }
         }, 35);
@@ -342,14 +467,14 @@ class AudioEngine {
 
       osc.type = 'triangle';
       if (type === 'up') {
-        osc.frequency.setValueAtTime(523.25, now); // C5
-        osc.frequency.exponentialRampToValueAtTime(783.99, now + 0.07); // G5
+        osc.frequency.setValueAtTime(523.25, now);
+        osc.frequency.exponentialRampToValueAtTime(783.99, now + 0.07);
       } else if (type === 'down') {
-        osc.frequency.setValueAtTime(783.99, now); // G5
-        osc.frequency.exponentialRampToValueAtTime(523.25, now + 0.07); // C5
+        osc.frequency.setValueAtTime(783.99, now);
+        osc.frequency.exponentialRampToValueAtTime(523.25, now + 0.07);
       } else if (type === 'switch') {
-        osc.frequency.setValueAtTime(659.25, now); // E5
-        osc.frequency.setValueAtTime(880, now + 0.04); // A5
+        osc.frequency.setValueAtTime(659.25, now);
+        osc.frequency.setValueAtTime(880, now + 0.04);
       } else if (type === 'repeat') {
         osc.frequency.setValueAtTime(440, now);
         osc.frequency.setValueAtTime(880, now + 0.05);
@@ -371,7 +496,7 @@ class AudioEngine {
   }
 
   /**
-   * Speaks the result with the crispest possible Indonesian voice and minimal delay
+   * Speaks the result with Indonesian voice and minimal delay
    */
   public speak(
     text: string,
@@ -402,7 +527,7 @@ class AudioEngine {
           utterance.voice = this.indonesianVoice;
         }
 
-        utterance.rate = options.rate ?? 1.08;
+        utterance.rate = options.rate ?? 1.12;
         utterance.pitch = options.pitch ?? 1.0;
         utterance.volume = options.volume ?? 1.0;
 
@@ -415,7 +540,6 @@ class AudioEngine {
           resolve();
         };
 
-        // Safety watchdog timer to prevent speech engine hanging
         const maxDuration = Math.max(1600, text.length * 180);
         const watchdog = setTimeout(() => {
           finish();
@@ -443,6 +567,19 @@ class AudioEngine {
         resolve();
       }
     });
+  }
+
+  /**
+   * Stop any current speech
+   */
+  public stopSpeaking() {
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      try {
+        window.speechSynthesis.cancel();
+      } catch {
+        // ignore
+      }
+    }
   }
 
   /**

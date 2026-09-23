@@ -17,7 +17,7 @@ export const PHONETIC_MAP: Record<string, number> = {
   se: 1,
   '1': 1,
 
-  // 2 - Tidak ada 'tu'/'to' agar tidak pernah bentrok dengan 'tujuh'
+  // 2
   dua: 2,
   duah: 2,
   duaa: 2,
@@ -53,7 +53,7 @@ export const PHONETIC_MAP: Record<string, number> = {
   nem: 6,
   '6': 6,
 
-  // 7 - Pelafalan khas Indonesia
+  // 7
   tujuh: 7,
   tuju: 7,
   tujuuh: 7,
@@ -62,14 +62,14 @@ export const PHONETIC_MAP: Record<string, number> = {
   pitu: 7,
   '7': 7,
 
-  // 8 - Kebiasaan orang Indonesia sering menyingkat delapan jadi 'lapan' / 'dlapan'
+  // 8
   delapan: 8,
   dlapan: 8,
   lapan: 8,
   wolu: 8,
   '8': 8,
 
-  // 9 - Kebiasaan orang Indonesia: 'sembilan', 'smbilan', 'bilan', 'songo'
+  // 9
   sembilan: 9,
   smbilan: 9,
   semilan: 9,
@@ -102,7 +102,7 @@ export const PHONETIC_MAP: Record<string, number> = {
   '19': 19,
   '20': 20,
 
-  // Kebiasaan istilah pasar / percakapan populer Indonesia
+  // Istilah Pasar / Populer
   gocap: 50,
   cepek: 100,
   pego: 150,
@@ -125,20 +125,43 @@ export const PHONETIC_MAP: Record<string, number> = {
   seperdua: 0.5,
   seperempat: 0.25,
   prapat: 0.25,
+
+  // English fallback in case speech recognition outputs English
+  zero: 0,
+  one: 1,
+  two: 2,
+  three: 3,
+  four: 4,
+  five: 5,
+  six: 6,
+  seven: 7,
+  eight: 8,
+  nine: 9,
+  ten: 10,
+  eleven: 11,
+  twelve: 12,
+  thirteen: 13,
+  fourteen: 14,
+  fifteen: 15,
+  twenty: 20,
+  thirty: 30,
+  forty: 40,
+  fifty: 50,
+  hundred: 100,
 };
 
 // Pemetaan digit tunggal murni bahasa Indonesia
 export const SINGLE_DIGIT_MAP: Record<string, number> = {
-  nol: 0, kosong: 0, '0': 0,
-  satu: 1, satuh: 1, siji: 1, '1': 1,
-  dua: 2, duah: 2, duaa: 2, duo: 2, loro: 2, '2': 2,
-  tiga: 3, tigah: 3, tigo: 3, telu: 3, '3': 3,
-  empat: 4, ampat: 4, mpat: 4, pat: 4, papat: 4, '4': 4,
-  lima: 5, limah: 5, limo: 5, '5': 5,
-  enam: 6, anam: 6, nam: 6, nem: 6, '6': 6,
-  tujuh: 7, tuju: 7, tujuuh: 7, tujuk: 7, tuduh: 7, pitu: 7, '7': 7,
-  delapan: 8, dlapan: 8, lapan: 8, wolu: 8, '8': 8,
-  sembilan: 9, smbilan: 9, semilan: 9, bilan: 9, songo: 9, '9': 9,
+  nol: 0, kosong: 0, '0': 0, zero: 0,
+  satu: 1, satuh: 1, siji: 1, '1': 1, one: 1,
+  dua: 2, duah: 2, duaa: 2, duo: 2, loro: 2, '2': 2, two: 2,
+  tiga: 3, tigah: 3, tigo: 3, telu: 3, '3': 3, three: 3,
+  empat: 4, ampat: 4, mpat: 4, pat: 4, papat: 4, '4': 4, four: 4,
+  lima: 5, limah: 5, limo: 5, '5': 5, five: 5,
+  enam: 6, anam: 6, nam: 6, nem: 6, '6': 6, six: 6,
+  tujuh: 7, tuju: 7, tujuuh: 7, tujuk: 7, tuduh: 7, pitu: 7, '7': 7, seven: 7,
+  delapan: 8, dlapan: 8, lapan: 8, wolu: 8, '8': 8, eight: 8,
+  sembilan: 9, smbilan: 9, semilan: 9, bilan: 9, songo: 9, '9': 9, nine: 9,
 };
 
 /**
@@ -165,13 +188,13 @@ export function parseSpokenNumber(text: string): number | null {
 
   // Hapus kata-kata pengantar/basa-basi kebiasaan orang Indonesia
   clean = clean
-    .replace(/(?:(?:di)?kali\s*(?:dua|2|duo))\s*$/i, '')
-    .replace(/^(?:dua|2|duo)\s*(?:kali|dikali)\s*/i, '')
+    .replace(/(?:(?:di)?kali\s*(?:dua|2|duo|two))\s*$/i, '')
+    .replace(/^(?:dua|2|duo|two)\s*(?:kali|dikali)\s*/i, '')
     .replace(/\b(berapa|hasil dari|hitunglah|hitung|tolong|angka|nomor|nilai|sebutkan|coba|dong|ya|nih|deh|itu|adalah|jawaban|mas|mbak|oi|woi|hei|halo)\b/g, '')
     .replace(/\s+/g, ' ')
     .trim();
 
-  if (!clean && (text.includes('dua') || text.includes('2') || text.includes('duo'))) {
+  if (!clean && (text.includes('dua') || text.includes('2') || text.includes('duo') || text.includes('two'))) {
     return 2;
   }
 
@@ -185,9 +208,7 @@ export function parseSpokenNumber(text: string): number | null {
   // KEBIAASAAN UTAMA INDONESIA: Gabungan digit berurutan
   // Contoh:
   // "lima delapan" -> 58
-  // "lima lapan" -> 58
   // "lima sembilan" -> 59
-  // "lima tujuh" -> 57
   // "dua lima" -> 25
   // "tujuh delapan" -> 78
   if (rawWords.length >= 2 && rawWords.every((w) => SINGLE_DIGIT_MAP[w] !== undefined)) {
@@ -199,8 +220,9 @@ export function parseSpokenNumber(text: string): number | null {
   }
 
   // Penanganan desimal lisan bahasa Indonesia e.g. "dua koma lima", "tujuh koma delapan"
-  if (clean.includes('koma')) {
-    const parts = clean.split('koma');
+  if (clean.includes('koma') || clean.includes('point') || clean.includes('titik')) {
+    const separator = clean.includes('koma') ? 'koma' : clean.includes('point') ? 'point' : 'titik';
+    const parts = clean.split(separator);
     const integerPart = parseIndonesianCompound(parts[0].trim());
     const decimalWords = parts[1].trim().split(' ').filter(Boolean);
     let decimalStr = '';
@@ -216,7 +238,7 @@ export function parseSpokenNumber(text: string): number | null {
     }
   }
 
-  // Penguraian angka majemuk bahasa Indonesia e.g. "lima puluh delapan", "lima puluh sembilan"
+  // Penguraian angka majemuk bahasa Indonesia e.g. "dua puluh lima", "seratus lima puluh"
   const compound = parseIndonesianCompound(clean);
   if (compound !== null) return compound;
 
@@ -236,7 +258,7 @@ export function parseSpokenNumber(text: string): number | null {
 }
 
 /**
- * Mengurai frasa bilangan formal & informal Indonesia (e.g. "lima puluh delapan", "seratus lima puluh")
+ * Mengurai frasa bilangan formal & informal Indonesia (e.g. "dua puluh lima", "seratus dua puluh")
  */
 export function parseIndonesianCompound(text: string): number | null {
   if (!text) return null;
@@ -255,7 +277,7 @@ export function parseIndonesianCompound(text: string): number | null {
     words.shift();
   }
 
-  // Pola cepat dua kata kebiasaan Indonesia:
+  // Pola dua kata e.g. "dua puluh" (20), "dua belas" (12), "dua ratus" (200), "dua ribu" (2000)
   if (words.length === 2) {
     const [w1, w2] = words;
     const d1 = SINGLE_DIGIT_MAP[w1];
@@ -281,7 +303,7 @@ export function parseIndonesianCompound(text: string): number | null {
     }
   }
 
-  // Akumulator bilangan formal Indonesia
+  // Akumulator bilangan formal Indonesia dengan hierarki ribuan, ratusan, puluhan yang benar
   let total = 0;
   let current = 0;
   let matchedAny = false;
@@ -316,15 +338,17 @@ export function parseIndonesianCompound(text: string): number | null {
       current += 10;
       matchedAny = true;
     } else if (word === 'ratus' || word === 'ratusan') {
-      if (current === 0) current = 1;
-      current *= 100;
+      const multiplier = current === 0 ? 1 : current;
+      total += multiplier * 100;
+      current = 0;
       matchedAny = true;
     } else if (word === 'seratus' || word === 'sratus') {
-      current += 100;
+      total += 100;
+      current = 0;
       matchedAny = true;
     } else if (word === 'ribu' || word === 'rebu') {
-      if (current === 0) current = 1;
-      total += current * 1000;
+      const multiplier = current === 0 ? 1 : current;
+      total += multiplier * 1000;
       current = 0;
       matchedAny = true;
     } else if (word === 'seribu' || word === 'sribu') {
@@ -332,8 +356,8 @@ export function parseIndonesianCompound(text: string): number | null {
       current = 0;
       matchedAny = true;
     } else if (word === 'juta') {
-      if (current === 0) current = 1;
-      total += current * 1000000;
+      const multiplier = current === 0 ? 1 : current;
+      total += multiplier * 1000000;
       current = 0;
       matchedAny = true;
     } else if (PHONETIC_MAP[word] !== undefined) {
@@ -350,7 +374,7 @@ export function parseIndonesianCompound(text: string): number | null {
 
 /**
  * Mengubah angka menjadi kata lisan bahasa Indonesia yang jernih dan fasih
- * Contoh: 116 -> "Seratus enam belas", 118 -> "Seratus delapan belas"
+ * Contoh: 116 -> "Seratus enam belas", 50 -> "Lima puluh"
  */
 export function numberToIndonesianWords(n: number): string {
   if (n === 0) return 'Nol';

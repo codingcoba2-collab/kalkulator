@@ -1,6 +1,7 @@
 import express from 'express';
 import dotenv from 'dotenv';
 import path from 'path';
+import fs from 'fs';
 import { GoogleGenAI } from '@google/genai';
 
 dotenv.config();
@@ -19,10 +20,17 @@ const port = getPort();
 
 app.use(express.json({ limit: '15mb' }));
 
-const ai = new GoogleGenAI();
+const ai = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY,
+  httpOptions: {
+    headers: {
+      'User-Agent': 'aistudio-build',
+    },
+  },
+});
 
 async function transcribeWithGemini(audioData: string, cleanMime: string) {
-  const models = ['gemini-3.5-flash-lite', 'gemini-3.6-flash', 'gemini-3.1-flash-lite'];
+  const models = ['gemini-3.5-transcribe', 'gemini-3.1-flash-lite', 'gemini-3.8-flash'];
   let lastError: any = null;
 
   for (const model of models) {
@@ -89,6 +97,10 @@ app.post('/api/transcribe', async (req, res) => {
       return res.status(400).json({ error: 'No audio data provided' });
     }
 
+    if (!process.env.GEMINI_API_KEY) {
+      return res.status(503).json({ error: 'GEMINI_API_KEY not configured' });
+    }
+
     const cleanMime = mimeType.split(';')[0];
     const data = await transcribeWithGemini(audioData, cleanMime);
     return res.status(200).json(data);
@@ -107,6 +119,16 @@ async function startServer() {
       appType: 'spa',
     });
     app.use(vite.middlewares);
+    app.use('*', async (req, res, next) => {
+      const url = req.originalUrl;
+      try {
+        let template = fs.readFileSync(path.resolve('index.html'), 'utf-8');
+        template = await vite.transformIndexHtml(url, template);
+        res.status(200).set({ 'Content-Type': 'text/html' }).end(template);
+      } catch (e) {
+        next(e);
+      }
+    });
   } else {
     app.use(express.static('dist'));
     app.get('*', (_req, res) => {

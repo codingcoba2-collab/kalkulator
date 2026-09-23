@@ -8,9 +8,10 @@ export interface CalculationHistoryItem {
   result: number;
   spokenOutput: string;
   timestamp: Date;
+  rawTranscript?: string;
 }
 
-export type ModeType = 'short' | 'detailed'; // short: "Seratus enam belas", detailed: "Lima delapan dikali dua sama dengan seratus enam belas"
+export type ModeType = 'short' | 'detailed'; // short: "Lima puluh", detailed: "Dua puluh lima dikali dua sama dengan lima puluh"
 
 export function useVoiceCalculator() {
   const [isListening, setIsListening] = useState<boolean>(false);
@@ -19,14 +20,18 @@ export function useVoiceCalculator() {
   const [lastCalculation, setLastCalculation] = useState<CalculationHistoryItem | null>(null);
   const [history, setHistory] = useState<CalculationHistoryItem[]>([]);
   const [volume, setVolume] = useState<number>(1.0);
-  const [speechRate, setSpeechRate] = useState<number>(1.18); // snappy, clear Indonesian speech
+  const [speechRate, setSpeechRate] = useState<number>(1.12);
   const [mode, setMode] = useState<ModeType>('short');
   const [isSupported, setIsSupported] = useState<boolean>(true);
   const [lastDetectedTranscript, setLastDetectedTranscript] = useState<string>('');
+  const [lastDetectedNumber, setLastDetectedNumber] = useState<number | null>(null);
   const [statusMessage, setStatusMessage] = useState<string>('Ketuk logo untuk mendengarkan');
   const [audioLevel, setAudioLevel] = useState<number>(0);
+  const [decibels, setDecibels] = useState<number>(-60);
+  const [micSensorError, setMicSensorError] = useState<string | null>(null);
+  const [isResultModalOpen, setIsResultModalOpen] = useState<boolean>(false);
 
-  // Persistent refs to avoid closure staleness and feedback loops
+  // Persistent refs
   const recognitionRef = useRef<any>(null);
   const isListeningRef = useRef<boolean>(false);
   const isSpeakingRef = useRef<boolean>(false);
@@ -78,10 +83,10 @@ export function useVoiceCalculator() {
           // already running or transient state
         }
       }
-    }, 60);
+    }, 80);
   }, []);
 
-  // Safe executor: processes number input and speaks result exactly ONCE
+  // Safe executor: processes number input, shows pop-up, and speaks result
   const processNumber = useCallback(
     async (numberInput: number, sourceTranscript: string = '') => {
       if (interimDebounceRef.current) {
@@ -91,12 +96,12 @@ export function useVoiceCalculator() {
 
       const now = Date.now();
 
-      // Guard 1: Feedback loop cooldown (ignore if app is speaking or just finished speaking)
+      // Guard 1: Echo cooldown
       if (now < cooldownUntilRef.current || isSpeakingRef.current) {
         return;
       }
 
-      // Guard 2: If detected word matches what the app JUST spoke (e.g. "seratus enam belas"), DROP IT!
+      // Guard 2: Filter words spoken by app
       const lowerSource = sourceTranscript.toLowerCase().trim();
       if (lastSpokenResultWordsRef.current.some((w) => w.length > 2 && lowerSource.includes(w))) {
         return;
@@ -114,13 +119,14 @@ export function useVoiceCalculator() {
       lastProcessedNumRef.current = numberInput;
 
       setIsProcessing(true);
-      audioEngine.haptic([25, 35]);
+      setLastDetectedNumber(numberInput);
+      setLastDetectedTranscript(sourceTranscript || String(numberInput));
+      audioEngine.haptic([25, 40]);
       audioEngine.playDetectPing();
 
-      // Hitung murni perkalian 2
+      // Hitung hasil perkalian 2
       const output = formatSpeechOutput(numberInput, modeRef.current);
 
-      // Catat kata-kata yang diucapkan agar speaker HP tidak memicu mikrofon sendiri
       const spokenWords = output.words.toLowerCase().split(/\s+/).filter(Boolean);
       lastSpokenResultWordsRef.current = [
         ...spokenWords,
@@ -133,19 +139,21 @@ export function useVoiceCalculator() {
         result: output.resultNum,
         spokenOutput: output.spokenText,
         timestamp: new Date(),
+        rawTranscript: sourceTranscript,
       };
 
       setLastCalculation(newItem);
       setHistory((prev) => [newItem, ...prev.slice(0, 19)]);
       setStatusMessage(`${numberInput} × 2 = ${output.resultNum}`);
 
+      // BUKA POP-UP HASIL SECARA INSTAN!
+      setIsResultModalOpen(true);
+
       setIsProcessing(false);
       setIsSpeaking(true);
 
-      // Kunci mikrofon selama berbicara agar speaker tidak terdengar oleh mic
       cooldownUntilRef.current = now + 4000;
 
-      // Abort pengenal suara sementara agar mic hening
       if (recognitionRef.current) {
         try {
           recognitionRef.current.abort();
@@ -162,7 +170,6 @@ export function useVoiceCalculator() {
         },
         onEnd: () => {
           setIsSpeaking(false);
-          // Beri jeda 450ms agar gema speaker di ruangan lenyap sempurna
           cooldownUntilRef.current = Date.now() + 450;
           if (isListeningRef.current) {
             setStatusMessage('Mendengarkan suara...');
@@ -192,7 +199,6 @@ export function useVoiceCalculator() {
 
     isVadBusyRef.current = true;
     try {
-      // Ditingkatkan agar ucapan dua kata (e.g. "lima delapan", "lima sembilan") tidak terpotong di tengah jeda kata
       const result = await audioEngine.recordVoiceUtterance({
         silenceThresholdMs: 380,
         maxDurationMs: 2500,
@@ -243,24 +249,25 @@ export function useVoiceCalculator() {
   const triggerVadCaptureRef = useRef(triggerVadCapture);
   triggerVadCaptureRef.current = triggerVadCapture;
 
-  // Real-time audio meter and VAD trigger loop
+  // Real-time audio meter & sensor diagnostic loop
   useEffect(() => {
     let active = true;
     const updateMeter = () => {
       if (!active) return;
       if (isListeningRef.current) {
-        const data = audioEngine.getAudioFrequencyData();
-        let sum = 0;
-        for (let i = 0; i < data.length; i++) {
-          sum += data[i];
-        }
-        const avg = data.length > 0 ? sum / data.length : 0;
-        const norm = Math.min(1, Math.pow(avg / 110, 1.2));
-        setAudioLevel(norm);
+        const status = audioEngine.getMicrophoneStatus();
+        setAudioLevel(status.sensorLevel);
+        setDecibels(status.decibels);
 
-        // Jika suara terdengar, tidak sibuk, dan tidak dalam cooldown
+        if (status.errorMessage) {
+          setMicSensorError(status.errorMessage);
+        } else {
+          setMicSensorError(null);
+        }
+
+        // Jika suara terdengar cukup kuat dan tidak sibuk
         if (
-          norm > 0.08 &&
+          status.sensorLevel > 0.08 &&
           !isVadBusyRef.current &&
           !isSpeakingRef.current &&
           !isProcessingRef.current &&
@@ -289,6 +296,7 @@ export function useVoiceCalculator() {
     }
     audioEngine.playGestureTone('repeat');
     audioEngine.haptic([15, 40]);
+    setIsResultModalOpen(true);
     audioEngine.speak(item.spokenOutput, {
       rate: speechRateRef.current,
       volume: volumeRef.current,
@@ -300,7 +308,7 @@ export function useVoiceCalculator() {
   const repeatLastAnswerRef = useRef(repeatLastAnswer);
   repeatLastAnswerRef.current = repeatLastAnswer;
 
-  // Initialize Web Speech Recognition (Engine A) with multi-digit Indonesian awareness
+  // Initialize Web Speech Recognition with error resilience
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
@@ -321,6 +329,7 @@ export function useVoiceCalculator() {
 
       rec.onstart = () => {
         setIsListening(true);
+        setMicSensorError(null);
         setStatusMessage('Mendengarkan suara...');
       };
 
@@ -347,14 +356,14 @@ export function useVoiceCalculator() {
         const primaryText = candidates[0];
         setLastDetectedTranscript(primaryText);
 
-        // Cek instruksi pengulangan suara
+        // Periksa apakah perintah pengulangan suara
         if (/\b(ulang|ulangi|lagi|apa tadi)\b/i.test(primaryText)) {
           if (interimDebounceRef.current) clearTimeout(interimDebounceRef.current);
           repeatLastAnswerRef.current();
           return;
         }
 
-        // Coba ekstraksi angka
+        // Ekstraksi angka dan tulis menjadi angka
         let foundNumber: number | null = null;
         for (const phrase of candidates) {
           const parsed = parseSpokenNumber(phrase);
@@ -365,7 +374,8 @@ export function useVoiceCalculator() {
         }
 
         if (foundNumber !== null) {
-          // JIKA SUDAH FINAL: Langsung eksekusi seketika!
+          setLastDetectedNumber(foundNumber);
+
           if (isFinal) {
             if (interimDebounceRef.current) {
               clearTimeout(interimDebounceRef.current);
@@ -373,8 +383,6 @@ export function useVoiceCalculator() {
             }
             processNumberRef.current(foundNumber, primaryText);
           } else {
-            // JIKA MASIH INTERIM: Beri jeda 320ms agar kata berikutnya (misal: "...sembilan" pada "lima sembilan")
-            // tidak terpotong prematur oleh kata pertama ("lima")!
             if (interimDebounceRef.current) {
               clearTimeout(interimDebounceRef.current);
             }
@@ -396,7 +404,23 @@ export function useVoiceCalculator() {
       };
 
       rec.onerror = (e: any) => {
-        console.warn('SpeechRecognition notice:', e.error);
+        const errType = e?.error;
+        console.warn('SpeechRecognition notice:', errType);
+
+        if (errType === 'not-allowed' || errType === 'service-not-allowed') {
+          setMicSensorError('Izin mikrofon ditolak oleh peramban. Silakan aktifkan mikrofon.');
+          setIsListening(false);
+          isListeningRef.current = false;
+          setStatusMessage('Izin mikrofon diperlukan');
+          return;
+        }
+
+        if (errType === 'audio-capture') {
+          setMicSensorError('Sensor mikrofon tidak terbaca atau sedang digunakan.');
+          setStatusMessage('Sensor mic tidak terbaca');
+        }
+
+        // no-speech or network: keep listening smoothly
         if (isListeningRef.current && !isSpeakingRef.current) {
           restartRecognition();
         }
@@ -426,10 +450,17 @@ export function useVoiceCalculator() {
     };
   }, [restartRecognition]);
 
-  // Start continuous listening
+  // Start continuous listening with microphone sensor check
   const startListening = async () => {
+    setMicSensorError(null);
     await audioEngine.prewarm();
-    await audioEngine.setupMicrophoneAnalyser();
+
+    const { analyser, error } = await audioEngine.setupMicrophoneAnalyser();
+    if (error) {
+      setMicSensorError(error);
+      setStatusMessage('Sensor mikrofon bermasalah');
+    }
+
     audioEngine.playGestureTone('up');
     audioEngine.haptic(25);
 
@@ -513,11 +544,23 @@ export function useVoiceCalculator() {
     setVolume(clamped);
   };
 
+  const closeResultModal = () => {
+    setIsResultModalOpen(false);
+  };
+
+  const openResultModal = () => {
+    if (lastCalculation) {
+      setIsResultModalOpen(true);
+    }
+  };
+
   return {
     isListening,
     isSpeaking,
     isProcessing,
     audioLevel,
+    decibels,
+    micSensorError,
     lastCalculation,
     history,
     volume,
@@ -525,7 +568,9 @@ export function useVoiceCalculator() {
     mode,
     isSupported,
     lastDetectedTranscript,
+    lastDetectedNumber,
     statusMessage,
+    isResultModalOpen,
     startListening,
     stopListening,
     toggleListening,
@@ -535,5 +580,7 @@ export function useVoiceCalculator() {
     decreaseSpeed,
     toggleMode,
     setVolumeLevel,
+    closeResultModal,
+    openResultModal,
   };
 }
